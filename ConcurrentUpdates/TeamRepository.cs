@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Data;
+using System.Data.SqlClient;
 using System.Linq;
 using Dapper;
 
@@ -7,46 +8,54 @@ namespace ConcurrentUpdates
 {
 	public class TeamRepository : ITeamsRepository
 	{
-		public TeamRepository(IDbConnection dbConnection)
+		public TeamRepository(string connectionString)
 		{
-			_dbConnection = dbConnection;
+			_connectionString = connectionString;
 		}
 
 		public Team GetTeam(Guid teamId)
 		{
-			var queryResult = _dbConnection.Query(
-				"SELECT Teams.TeamId, ParticipantId, TeamMaxSize FROM Teams LEFT JOIN Participants ON Teams.TeamId=Participants.TeamId WHERE Teams.TeamId=@teamId", 
-				new {teamId});
-			if (queryResult == null || !queryResult.Any())
+			using (var dbConnection = new SqlConnection(_connectionString))
 			{
-				return null;
-			}
+				var queryResult = dbConnection.Query(
+					"SELECT Teams.TeamId, ParticipantId, TeamMaxSize FROM Teams LEFT JOIN Participants ON Teams.TeamId=Participants.TeamId WHERE Teams.TeamId=@teamId",
+					new {teamId});
+				if (queryResult == null || !queryResult.Any())
+				{
+					return null;
+				}
 
-			var first = queryResult.First();
-			if (first.ParticipantId == null)
-			{
-				return new Team(first.TeamId, first.TeamMaxSize, Enumerable.Empty<Guid>());
-			}
+				var first = queryResult.First();
+				if (first.ParticipantId == null)
+				{
+					return new Team(first.TeamId, first.TeamMaxSize, Enumerable.Empty<Guid>());
+				}
 
-			var participants = queryResult.Select(row => (Guid) row.ParticipantId);
-			return new Team(first.TeamId, first.TeamMaxSize, participants);
+				var participants = queryResult.Select(row => (Guid) row.ParticipantId);
+				return new Team(first.TeamId, first.TeamMaxSize, participants);
+			}
 		}
 
 		public void SaveTeam(Team team)
 		{
-			using (var transaction = _dbConnection.BeginTransaction())
+			using (var dbConnection = new SqlConnection(_connectionString))
 			{
-				foreach (var teamParticipant in team.Participants)
+				dbConnection.Open();
+				using (var transaction = dbConnection.BeginTransaction())
 				{
-					_dbConnection.Execute(
-						"IF NOT EXISTS (SELECT * FROM Participants WHERE ParticipantId=@participantId) INSERT INTO Participants VALUES (@participantId, @teamId)",
-						new {participantId = teamParticipant, teamId = team.Id},
-						transaction);
+					foreach (var teamParticipant in team.Participants)
+					{
+						dbConnection.Execute(
+							"IF NOT EXISTS (SELECT * FROM Participants WHERE ParticipantId=@participantId) INSERT INTO Participants VALUES (@participantId, @teamId)",
+							new {participantId = teamParticipant, teamId = team.Id},
+							transaction);
+					}
+					transaction.Commit();
 				}
-				transaction.Commit();
+				dbConnection.Close();
 			}
 		}
 
-		private readonly IDbConnection _dbConnection;
+		private readonly string _connectionString;
 	}
 }

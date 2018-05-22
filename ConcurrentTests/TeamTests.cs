@@ -2,6 +2,7 @@ using System;
 using System.Data;
 using System.Data.SqlClient;
 using System.Linq;
+using System.Threading.Tasks;
 using ConcurrentUpdates;
 using Dapper;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -14,15 +15,14 @@ namespace ConcurrentTests
 		[TestInitialize]
 	    public void Initialize()
 		{
-			_sqlConnection =
-				new SqlConnection(
-					@"Data Source=(LocalDB)\MSSQLLocalDB;AttachDbFilename=""C:\Users\Sovent\Documents\Visual Studio 2017\Projects\ConcurrentUpdates\groups.mdf"";Integrated Security=True;Connect Timeout=30");
+			var connectionString = @"Data Source=(LocalDB)\MSSQLLocalDB;AttachDbFilename=""C:\Users\Sovent\Documents\Visual Studio 2017\Projects\ConcurrentUpdates\groups.mdf"";Integrated Security=True;Connect Timeout=30";
+			_sqlConnection = new SqlConnection(connectionString);
 			_sqlConnection.Open();
 			_sqlConnection.Execute("DROP TABLE Teams;" +
 			                       "DROP TABLE Participants;" +
 			                       "CREATE TABLE Teams(TeamId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY, TeamMaxSize INT);" +
 			                      "CREATE TABLE Participants(ParticipantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY, TeamId UNIQUEIDENTIFIER)"); 
-			var repository = new TeamRepository(_sqlConnection);
+			var repository = new TeamRepository(connectionString);
 			_teamsService = new TeamsService(repository);
 		}
 
@@ -41,6 +41,17 @@ namespace ConcurrentTests
 	        var loadedTeam = _teamsService.GetTeam(team);
 			Assert.IsTrue(loadedTeam.Participants.Count() <= loadedTeam.TeamMaxSize);
         }
+
+		[TestMethod]
+	    public void ConcurrentlyAddParticipantOverTheLimit_ParticipantNotAdded()
+	    {
+		    var team = InitializeTeam();
+			Parallel.Invoke(
+				() => _teamsService.AddParticipant(team, Guid.NewGuid()), 
+				() => _teamsService.AddParticipant(team, Guid.NewGuid()));
+		    var loadedTeam = _teamsService.GetTeam(team);
+			Assert.IsTrue(loadedTeam.Participants.Count() <= loadedTeam.TeamMaxSize);
+	    }
 
 	    private Guid InitializeTeam()
 	    {
