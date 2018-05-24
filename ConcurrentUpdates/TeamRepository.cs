@@ -1,7 +1,8 @@
 ﻿using System;
-using System.Data;
+using System.Collections.Concurrent;
 using System.Data.SqlClient;
 using System.Linq;
+using System.Threading;
 using Dapper;
 
 namespace ConcurrentUpdates
@@ -15,6 +16,8 @@ namespace ConcurrentUpdates
 
 		public Team GetTeam(Guid teamId)
 		{
+			var autoResetEvent = _locks.GetOrAdd(teamId, guid => new AutoResetEvent(true));
+			autoResetEvent.WaitOne();
 			using (var dbConnection = new SqlConnection(_connectionString))
 			{
 				var queryResult = dbConnection.Query(
@@ -54,8 +57,11 @@ namespace ConcurrentUpdates
 				}
 				dbConnection.Close();
 			}
+			var autoResetEvent = _locks[team.Id];
+			autoResetEvent.Set();
 		}
 
+		private readonly ConcurrentDictionary<Guid, AutoResetEvent> _locks = new ConcurrentDictionary<Guid, AutoResetEvent>();
 		private readonly string _connectionString;
 	}
 }
