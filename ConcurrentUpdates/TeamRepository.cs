@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Data;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Threading;
@@ -16,12 +17,10 @@ namespace ConcurrentUpdates
 
 		public Team GetTeam(Guid teamId)
 		{
-			var autoResetEvent = _locks.GetOrAdd(teamId, guid => new AutoResetEvent(true));
-			autoResetEvent.WaitOne();
 			using (var dbConnection = new SqlConnection(_connectionString))
 			{
 				var queryResult = dbConnection.Query(
-					"SELECT Teams.TeamId, ParticipantId, TeamMaxSize FROM Teams LEFT JOIN Participants ON Teams.TeamId=Participants.TeamId WHERE Teams.TeamId=@teamId",
+					"SELECT Teams.TeamId, ParticipantId, TeamMaxSize, LastModifiedOn FROM Teams LEFT JOIN Participants ON Teams.TeamId=Participants.TeamId WHERE Teams.TeamId=@teamId",
 					new {teamId});
 				if (queryResult == null || !queryResult.Any())
 				{
@@ -31,11 +30,11 @@ namespace ConcurrentUpdates
 				var first = queryResult.First();
 				if (first.ParticipantId == null)
 				{
-					return new Team(first.TeamId, first.TeamMaxSize, Enumerable.Empty<Guid>());
+					return new Team(first.TeamId, first.TeamMaxSize, Enumerable.Empty<Guid>(), default(DateTimeOffset));
 				}
 
 				var participants = queryResult.Select(row => (Guid) row.ParticipantId);
-				return new Team(first.TeamId, first.TeamMaxSize, participants);
+				return new Team(first.TeamId, first.TeamMaxSize, participants, first.LastModifiedOn);
 			}
 		}
 
@@ -46,6 +45,10 @@ namespace ConcurrentUpdates
 				dbConnection.Open();
 				using (var transaction = dbConnection.BeginTransaction())
 				{
+					var rowsUpdated = dbConnection.Execute(
+						"UPDATE Teams SET LastModifiedOn=SYSDATETIMEOFFSET() WHERE TeamId=@id AND LastModifiedOn=@lastModifiedOn",
+						new { id = team.Id, lastModifiedOn = team.LastModifiedOn },
+						transaction);
 					foreach (var teamParticipant in team.Participants)
 					{
 						dbConnection.Execute(
@@ -53,15 +56,18 @@ namespace ConcurrentUpdates
 							new {participantId = teamParticipant, teamId = team.Id},
 							transaction);
 					}
+					if (rowsUpdated == 0)
+					{
+						transaction.Rollback();
+						throw new DBConcurrencyException("Optimistic lock failed");
+					}
+
 					transaction.Commit();
 				}
 				dbConnection.Close();
 			}
-			var autoResetEvent = _locks[team.Id];
-			autoResetEvent.Set();
 		}
 
-		private readonly ConcurrentDictionary<Guid, AutoResetEvent> _locks = new ConcurrentDictionary<Guid, AutoResetEvent>();
 		private readonly string _connectionString;
 	}
 }

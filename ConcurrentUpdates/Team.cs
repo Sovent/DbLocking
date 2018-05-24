@@ -3,9 +3,9 @@ using System.Collections.Generic;
 
 namespace ConcurrentUpdates
 {
-    public class Team
+    public class Team : AggregateRoot
 	{
-		public Team(Guid id, int teamMaxSize, IEnumerable<Guid> participants)
+		public Team(Guid id, int teamMaxSize, IEnumerable<Guid> participants, DateTimeOffset lastModifiedOn) : base(lastModifiedOn)
 		{
 			Id = id;
 			TeamMaxSize = teamMaxSize;

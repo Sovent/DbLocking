@@ -20,7 +20,7 @@ namespace ConcurrentTests
 			_sqlConnection.Open();
 			_sqlConnection.Execute("DROP TABLE Teams;" +
 			                       "DROP TABLE Participants;" +
-			                       "CREATE TABLE Teams(TeamId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY, TeamMaxSize INT);" +
+			                       "CREATE TABLE Teams(TeamId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY, TeamMaxSize INT, LastModifiedOn DATETIMEOFFSET);" +
 			                      "CREATE TABLE Participants(ParticipantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY, TeamId UNIQUEIDENTIFIER)"); 
 			var repository = new TeamRepository(connectionString);
 			_teamsService = new TeamsService(repository);
@@ -46,9 +46,17 @@ namespace ConcurrentTests
 	    public void ConcurrentlyAddParticipantOverTheLimit_ParticipantNotAdded()
 	    {
 		    var team = InitializeTeam();
-			Parallel.Invoke(
-				() => _teamsService.AddParticipant(team, Guid.NewGuid()), 
-				() => _teamsService.AddParticipant(team, Guid.NewGuid()));
+		    try
+		    {
+			    Parallel.Invoke(
+				    () => _teamsService.AddParticipant(team, Guid.NewGuid()), 
+				    () => _teamsService.AddParticipant(team, Guid.NewGuid()));
+		    }
+		    catch (AggregateException exception)
+		    {
+			    Assert.IsInstanceOfType(exception.InnerException, typeof(DBConcurrencyException));
+		    }
+
 		    var loadedTeam = _teamsService.GetTeam(team);
 			Assert.IsTrue(loadedTeam.Participants.Count() <= loadedTeam.TeamMaxSize);
 	    }
@@ -59,8 +67,8 @@ namespace ConcurrentTests
 		    using (var transaction = _sqlConnection.BeginTransaction())
 		    {
 			    _sqlConnection.Execute(
-					"INSERT INTO Teams VALUES (@teamId, @teamMaxSize)", 
-					new {teamId, teamMaxSize = 2},
+					"INSERT INTO Teams VALUES (@teamId, @teamMaxSize, @lastModifiedOn)", 
+					new {teamId, teamMaxSize = 2, lastModifiedOn = DateTimeOffset.MinValue},
 					transaction);
 			    _sqlConnection.Execute(
 					"INSERT INTO Participants VALUES (@participantId, @teamId)",
